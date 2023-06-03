@@ -21,7 +21,7 @@ func newArrivalGroupAccumulator() *arrivalGroupAccumulator {
 		// TimeDelta send_time_delta = send_time - current_timestamp_group_.send_time;
 		// if (send_time_delta.IsZero())
 		// return true;
-		interDepartureThreshold:          100 * time.Microsecond,
+		interDepartureThreshold:          5 * time.Millisecond,
 		interArrivalThreshold:            5 * time.Millisecond,
 		interGroupDelayVariationTreshold: 0,
 	}

@@ -17,11 +17,11 @@ const (
 	// https://datatracker.ietf.org/doc/html/draft-ietf-rmcat-gcc-02#section-6
 
 	increaseLossThreshold = 0.02
-	increaseTimeThreshold = 300 * time.Millisecond
+	increaseTimeThreshold = 200 * time.Millisecond
 	increaseFactor        = 1.05
 
 	decreaseLossThreshold = 0.1
-	decreaseTimeThreshold = 300 * time.Millisecond
+	decreaseTimeThreshold = 200 * time.Millisecond
 )
 
 // LossStats contains internal statistics of the loss based controller
