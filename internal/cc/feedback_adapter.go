@@ -42,11 +42,19 @@ func NewFeedbackAdapter(factory logging.LoggerFactory) *FeedbackAdapter {
 	}
 }
 
+// NewFeedbackAdapterSmall returns a new FeedbackAdapter
+func NewFeedbackAdapterSmall(factory logging.LoggerFactory) *FeedbackAdapter {
+	return &FeedbackAdapter{
+		history: newFeedbackHistory(250),
+		log:     factory.NewLogger("feedback_adapter"),
+	}
+}
+
 func (f *FeedbackAdapter) onSentRFC8888(ts time.Time, header *rtp.Header, size int) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	f.history.add(Acknowledgment{
+	f.history.add(&Acknowledgment{
 		SequenceNumber: header.SequenceNumber,
 		SSRC:           header.SSRC,
 		Size:           size,
@@ -69,14 +77,8 @@ func (f *FeedbackAdapter) onSentTWCC(ts time.Time, extID uint8, header *rtp.Head
 	defer f.lock.Unlock()
 
 	f.log.Infof("[twcc] recorded packet sn:%d ts:%d\n", tccExt.TransportSequence, ts.Unix())
-	f.history.add(Acknowledgment{
-		SequenceNumber: tccExt.TransportSequence,
-		SSRC:           0,
-		Size:           header.MarshalSize() + size,
-		Departure:      ts,
-		Arrival:        time.Time{},
-		ECN:            0,
-	})
+
+	f.history.addPooled(tccExt.TransportSequence, 0, header.MarshalSize()+size, ts, time.Time{}, 0)
 	return nil
 }
 
@@ -158,7 +160,7 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(_ time.Time, feedback *rtcp.Tran
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	result := []Acknowledgment{}
+	var result []Acknowledgment
 	index := feedback.BaseSequenceNumber
 	refTime := time.Time{}.Add(time.Duration(feedback.ReferenceTime) * 64 * time.Millisecond)
 	recvDeltas := feedback.RecvDeltas
@@ -201,7 +203,7 @@ func (f *FeedbackAdapter) OnRFC8888Feedback(_ time.Time, feedback *rtcp.CCFeedba
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	result := []Acknowledgment{}
+	var result []Acknowledgment
 	referenceTime := ntp.ToTime(uint64(feedback.ReportTimestamp) << 16)
 	for _, rb := range feedback.ReportBlocks {
 		for i, mb := range rb.MetricBlocks {
@@ -232,6 +234,7 @@ type feedbackHistory struct {
 	size      int
 	evictList *list.List
 	items     map[feedbackHistoryKey]*list.Element
+	ackPool   sync.Pool
 }
 
 func newFeedbackHistory(size int) *feedbackHistory {
@@ -239,6 +242,12 @@ func newFeedbackHistory(size int) *feedbackHistory {
 		size:      size,
 		evictList: list.New(),
 		items:     make(map[feedbackHistoryKey]*list.Element),
+		ackPool: sync.Pool{
+			New: func() interface{} {
+				var ack Acknowledgment
+				return &ack
+			},
+		},
 	}
 }
 
@@ -252,7 +261,27 @@ func (f *feedbackHistory) get(key feedbackHistoryKey) (Acknowledgment, bool) {
 	return Acknowledgment{}, false
 }
 
-func (f *feedbackHistory) add(ack Acknowledgment) {
+func (f *feedbackHistory) addPooled(
+	sequenceNumber uint16, // Either RTP SequenceNumber or TWCC
+	ssrc uint32,
+	size int,
+	departure time.Time,
+	arrival time.Time,
+	ecn rtcp.ECN) {
+
+	ack := &Acknowledgment{}
+	//ack := f.ackPool.Get().(*Acknowledgment)
+	ack.SequenceNumber = sequenceNumber
+	ack.SSRC = ssrc
+	ack.Size = size
+	ack.Departure = departure
+	ack.Arrival = arrival
+	ack.ECN = ecn
+
+	f.add(ack)
+}
+
+func (f *feedbackHistory) add(ack *Acknowledgment) {
 	key := feedbackHistoryKey{
 		ssrc:           ack.SSRC,
 		sequenceNumber: ack.SequenceNumber,
@@ -275,11 +304,13 @@ func (f *feedbackHistory) add(ack Acknowledgment) {
 func (f *feedbackHistory) removeOldest() {
 	if ent := f.evictList.Back(); ent != nil {
 		f.evictList.Remove(ent)
-		if ack, ok := ent.Value.(Acknowledgment); ok {
+		if ack, ok := ent.Value.(*Acknowledgment); ok {
 			key := feedbackHistoryKey{
 				ssrc:           ack.SSRC,
 				sequenceNumber: ack.SequenceNumber,
 			}
+
+			//f.ackPool.Put(ack)
 			delete(f.items, key)
 		}
 	}

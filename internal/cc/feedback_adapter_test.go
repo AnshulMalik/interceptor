@@ -5,16 +5,20 @@ package cc
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/pion/interceptor"
+	"github.com/pion/logging"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/assert"
 )
 
 const hdrExtID = uint8(1)
+
+var logger = logging.NewDefaultLoggerFactory()
 
 func TestUnpackRunLengthChunk(t *testing.T) {
 	attributes := make(interceptor.Attributes)
@@ -215,7 +219,7 @@ func TestUnpackRunLengthChunk(t *testing.T) {
 		i := i
 		tc := tc
 		t.Run(fmt.Sprintf("%v", i), func(t *testing.T) {
-			fa := NewFeedbackAdapter()
+			fa := NewFeedbackAdapter(logger)
 
 			headers := []*rtp.Header{}
 			for i, nr := range tc.sentTLCC {
@@ -238,6 +242,22 @@ func TestUnpackRunLengthChunk(t *testing.T) {
 			assert.Equal(t, tc.acks, acks)
 		})
 	}
+}
+
+func Benchmark_BenchList(b *testing.B) {
+	//fa := NewFeedbackAdapter(logger)
+	fas := NewFeedbackAdapterSmall(logger)
+	attributes := make(interceptor.Attributes)
+	attributes.Set(TwccExtensionAttributesKey, hdrExtID)
+
+	b.Run("small", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			pkt := getPacketWithTransportCCExtB(b, uint16(i))
+			fas.OnSent(time.Time{}, &pkt.Header, 0, attributes)
+		}
+		runtime.GC()
+		b.ReportAllocs()
+	})
 }
 
 func TestUnpackStatusVectorChunk(t *testing.T) {
@@ -400,7 +420,7 @@ func TestUnpackStatusVectorChunk(t *testing.T) {
 		i := i
 		tc := tc
 		t.Run(fmt.Sprintf("%v", i), func(t *testing.T) {
-			fa := NewFeedbackAdapter()
+			fa := NewFeedbackAdapter(logger)
 
 			headers := []*rtp.Header{}
 			for i, nr := range tc.sentTLCC {
@@ -411,7 +431,7 @@ func TestUnpackStatusVectorChunk(t *testing.T) {
 				assert.NoError(t, fa.OnSent(time.Time{}, h, 0, attributes))
 			}
 
-			n, refTime, acks, err := fa.unpackStatusVectorChunk(tc.start, time.Time{}, &tc.chunk, tc.deltas)
+			n, refTime, acks, err := fa.unpackStatusVectorChunk(tc.start, time.Time{}, &tc.chunk, tc.deltas, 14)
 			assert.NoError(t, err)
 			assert.Len(t, acks, len(tc.acks))
 			assert.Equal(t, tc.n, n)
@@ -439,9 +459,23 @@ func getPacketWithTransportCCExt(t *testing.T, sequenceNumber uint16) *rtp.Packe
 	return &pkt
 }
 
+func getPacketWithTransportCCExtB(b *testing.B, sequenceNumber uint16) *rtp.Packet {
+	pkt := rtp.Packet{
+		Header:  rtp.Header{},
+		Payload: []byte{},
+	}
+	ext := &rtp.TransportCCExtension{
+		TransportSequence: sequenceNumber,
+	}
+	r, err := ext.Marshal()
+	assert.NoError(b, err)
+	assert.NoError(b, pkt.SetExtension(hdrExtID, r))
+	return &pkt
+}
+
 func TestFeedbackAdapterTWCC(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 		result, err := adapter.OnTransportCCFeedback(time.Time{}, &rtcp.TransportLayerCC{})
 		assert.NoError(t, err)
 		assert.Empty(t, result)
@@ -449,7 +483,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 
 	t.Run("setsCorrectReceiveTime", func(t *testing.T) {
 		t0 := time.Time{}
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 		headers := []rtp.Header{}
 		for i := uint16(0); i < 22; i++ {
 			pkt := getPacketWithTransportCCExt(t, i)
@@ -579,7 +613,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 	})
 
 	t.Run("doesNotCrashOnTooManyFeedbackReports", func(*testing.T) {
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 		assert.NotPanics(t, func() {
 			_, err := adapter.OnTransportCCFeedback(time.Time{}, &rtcp.TransportLayerCC{
 				Header:             rtcp.Header{},
@@ -618,7 +652,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 
 	t.Run("worksOnSequenceNumberWrapAround", func(t *testing.T) {
 		t0 := time.Time{}
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 		pkt65535 := getPacketWithTransportCCExt(t, 65535)
 		pkt0 := getPacketWithTransportCCExt(t, 0)
 		assert.NoError(t, adapter.OnSent(t0, &pkt65535.Header, 1200, interceptor.Attributes{TwccExtensionAttributesKey: hdrExtID}))
@@ -679,7 +713,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 
 	t.Run("ignoresPossiblyInFlightPackets", func(t *testing.T) {
 		t0 := time.Time{}
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 		headers := []rtp.Header{}
 		for i := uint16(0); i < 8; i++ {
 			pkt := getPacketWithTransportCCExt(t, i)
@@ -747,7 +781,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 	})
 
 	t.Run("runLengthChunk", func(t *testing.T) {
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 		t0 := time.Time{}
 		for i := uint16(0); i < 20; i++ {
 			pkt := getPacketWithTransportCCExt(t, i)
@@ -788,7 +822,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 	})
 
 	t.Run("statusVectorChunk", func(t *testing.T) {
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 		t0 := time.Time{}
 		for i := uint16(0); i < 20; i++ {
 			pkt := getPacketWithTransportCCExt(t, i)
@@ -844,7 +878,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 	})
 
 	t.Run("mixedRunLengthAndStatusVector", func(t *testing.T) {
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 
 		t0 := time.Time{}
 		for i := uint16(0); i < 20; i++ {
@@ -911,7 +945,7 @@ func TestFeedbackAdapterTWCC(t *testing.T) {
 	})
 
 	t.Run("doesNotcrashOnInvalidTWCCPacket", func(t *testing.T) {
-		adapter := NewFeedbackAdapter()
+		adapter := NewFeedbackAdapter(logger)
 
 		t0 := time.Time{}
 		for i := uint16(1008); i < 1030; i++ {
