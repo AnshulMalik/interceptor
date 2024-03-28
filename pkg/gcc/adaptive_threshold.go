@@ -49,7 +49,7 @@ func newAdaptiveThreshold(opts ...adaptiveThresholdOption) *adaptiveThreshold {
 		thresh:                 time.Duration(12500 * float64(time.Microsecond)),
 		overuseCoefficientUp:   0.01,
 		overuseCoefficientDown: 0.00018,
-		min:                    50 * time.Millisecond,
+		min:                    30 * time.Millisecond,
 		max:                    600 * time.Millisecond,
 		lastUpdate:             time.Time{},
 		numDeltas:              0,
