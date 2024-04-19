@@ -11,6 +11,7 @@ import (
 
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/internal/ntp"
+	"github.com/pion/logging"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 )
@@ -29,11 +30,16 @@ var (
 type FeedbackAdapter struct {
 	lock    sync.Mutex
 	history *feedbackHistory
+
+	log logging.LeveledLogger
 }
 
 // NewFeedbackAdapter returns a new FeedbackAdapter
-func NewFeedbackAdapter() *FeedbackAdapter {
-	return &FeedbackAdapter{history: newFeedbackHistory(250)}
+func NewFeedbackAdapter(factory logging.LoggerFactory) *FeedbackAdapter {
+	return &FeedbackAdapter{
+		history: newFeedbackHistory(5000),
+		log:     factory.NewLogger("feedback_adapter"),
+	}
 }
 
 func (f *FeedbackAdapter) onSentRFC8888(ts time.Time, header *rtp.Header, size int) error {
@@ -61,6 +67,8 @@ func (f *FeedbackAdapter) onSentTWCC(ts time.Time, extID uint8, header *rtp.Head
 
 	f.lock.Lock()
 	defer f.lock.Unlock()
+
+	f.log.Infof("[twcc] recorded packet sn:%d ts:%d\n", tccExt.TransportSequence, ts.Unix())
 	f.history.add(Acknowledgment{
 		SequenceNumber: tccExt.TransportSequence,
 		SSRC:           0,
@@ -111,11 +119,18 @@ func (f *FeedbackAdapter) unpackRunLengthChunk(start uint16, refTime time.Time, 
 	return deltaIndex, refTime, result, nil
 }
 
-func (f *FeedbackAdapter) unpackStatusVectorChunk(start uint16, refTime time.Time, chunk *rtcp.StatusVectorChunk, deltas []*rtcp.RecvDelta) (consumedDeltas int, nextRef time.Time, acks []Acknowledgment, err error) {
-	result := make([]Acknowledgment, len(chunk.SymbolList))
+func (f *FeedbackAdapter) unpackStatusVectorChunk(start uint16, refTime time.Time, chunk *rtcp.StatusVectorChunk,
+	deltas []*rtcp.RecvDelta, maxBitsToRead int) (consumedDeltas int, nextRef time.Time, acks []Acknowledgment, err error) {
+
+	bitsToRead := len(chunk.SymbolList)
+	if bitsToRead > maxBitsToRead {
+		bitsToRead = maxBitsToRead
+	}
+	result := make([]Acknowledgment, bitsToRead)
 	deltaIndex := 0
 	resultIndex := 0
-	for i, symbol := range chunk.SymbolList {
+	for i := 0; i < bitsToRead; i++ {
+		symbol := chunk.SymbolList[i]
 		key := feedbackHistoryKey{
 			ssrc:           0,
 			sequenceNumber: start + uint16(i),
@@ -148,9 +163,11 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(_ time.Time, feedback *rtcp.Tran
 	refTime := time.Time{}.Add(time.Duration(feedback.ReferenceTime) * 64 * time.Millisecond)
 	recvDeltas := feedback.RecvDeltas
 
+	processedPacketNum := 0
 	for _, chunk := range feedback.PacketChunks {
 		switch chunk := chunk.(type) {
 		case *rtcp.RunLengthChunk:
+			processedPacketNum += int(chunk.RunLength)
 			n, nextRefTime, acks, err := f.unpackRunLengthChunk(index, refTime, chunk, recvDeltas)
 			if err != nil {
 				return nil, err
@@ -160,11 +177,13 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(_ time.Time, feedback *rtcp.Tran
 			recvDeltas = recvDeltas[n:]
 			index = uint16(int(index) + len(acks))
 		case *rtcp.StatusVectorChunk:
-			n, nextRefTime, acks, err := f.unpackStatusVectorChunk(index, refTime, chunk, recvDeltas)
+			maxBitsToRead := int(feedback.PacketStatusCount) - processedPacketNum
+			n, nextRefTime, acks, err := f.unpackStatusVectorChunk(index, refTime, chunk, recvDeltas, maxBitsToRead)
 			if err != nil {
 				return nil, err
 			}
 			refTime = nextRefTime
+			processedPacketNum += len(acks)
 			result = append(result, acks...)
 			recvDeltas = recvDeltas[n:]
 			index = uint16(int(index) + len(acks))
