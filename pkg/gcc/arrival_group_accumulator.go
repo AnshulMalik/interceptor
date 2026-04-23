@@ -77,7 +77,7 @@ func interDepartureTimePkt(a arrivalGroup, b cc.Acknowledgment) time.Duration {
 	if len(a.packets) == 0 {
 		return 0
 	}
-	return b.Departure.Sub(a.firstDeparture)
+	return b.Departure.Sub(a.departure)
 }
 
 func interGroupDelayVariationPkt(group arrivalGroup, ack cc.Acknowledgment) time.Duration {

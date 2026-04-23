@@ -97,7 +97,7 @@ func (a *adaptiveThreshold) update(estimate time.Duration, arrivalDelta time.Dur
 		k = a.overuseCoefficientDown
 	}
 	maxTimeDelta := 100 * time.Millisecond
-	timeDelta := time.Duration(minInt(int(arrivalDelta.Milliseconds()), int(maxTimeDelta.Milliseconds()))) * time.Millisecond
+	timeDelta := time.Duration(min(int(arrivalDelta.Milliseconds()), int(maxTimeDelta.Milliseconds()))) * time.Millisecond
 	d := absEstimate - a.thresh
 	add := k * float64(d.Milliseconds()) * float64(timeDelta.Milliseconds())
 	// fmt.Println("changing threshold, delta:", time.Duration(add*1000)*time.Microsecond, ",add:", add,

@@ -124,14 +124,11 @@ func (f *FeedbackAdapter) unpackRunLengthChunk(
 	return deltaIndex, refTime, result, nil
 }
 
-func (f *FeedbackAdapter) unpackStatusVectorChunk(start uint16, refTime time.Time, chunk *rtcp.StatusVectorChunk,
-	deltas []*rtcp.RecvDelta, maxBitsToRead int) (consumedDeltas int, nextRef time.Time, acks []Acknowledgment, err error) {
-
+func (f *FeedbackAdapter) unpackStatusVectorChunk(
+	start uint16, refTime time.Time, chunk *rtcp.StatusVectorChunk, deltas []*rtcp.RecvDelta,
+) (consumedDeltas int, nextRef time.Time, acks []Acknowledgment, err error) {
+	result := make([]Acknowledgment, len(chunk.SymbolList))
 	bitsToRead := len(chunk.SymbolList)
-	if bitsToRead > maxBitsToRead {
-		bitsToRead = maxBitsToRead
-	}
-	result := make([]Acknowledgment, bitsToRead)
 	deltaIndex := 0
 	resultIndex := 0
 	for i := 0; i < bitsToRead; i++ {
@@ -170,11 +167,9 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(
 	refTime := time.Time{}.Add(time.Duration(feedback.ReferenceTime) * 64 * time.Millisecond)
 	recvDeltas := feedback.RecvDeltas
 
-	processedPacketNum := 0
 	for _, chunk := range feedback.PacketChunks {
 		switch chunk := chunk.(type) {
 		case *rtcp.RunLengthChunk:
-			processedPacketNum += int(chunk.RunLength)
 			n, nextRefTime, acks, err := f.unpackRunLengthChunk(index, refTime, chunk, recvDeltas)
 			if err != nil {
 				return nil, err
@@ -184,19 +179,26 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(
 			recvDeltas = recvDeltas[n:]
 			index = uint16(int(index) + len(acks)) //nolint:gosec // G115
 		case *rtcp.StatusVectorChunk:
-			maxBitsToRead := int(feedback.PacketStatusCount) - processedPacketNum
-			n, nextRefTime, acks, err := f.unpackStatusVectorChunk(index, refTime, chunk, recvDeltas, maxBitsToRead)
+			n, nextRefTime, acks, err := f.unpackStatusVectorChunk(index, refTime, chunk, recvDeltas)
 			if err != nil {
 				return nil, err
 			}
 			refTime = nextRefTime
-			processedPacketNum += len(acks)
 			result = append(result, acks...)
 			recvDeltas = recvDeltas[n:]
 			index = uint16(int(index) + len(acks)) //nolint:gosec // G115
 		default:
 			return nil, errInvalidFeedback
 		}
+	}
+
+	// Trim to PacketStatusCount to discard padding slots in the last StatusVectorChunk.
+	// StatusVectorChunks always encode a fixed number of slots (7 or 14), so the final
+	// chunk may have trailing "not received" symbols that don't correspond to real sent
+	// packets. With a large send history these padding SNs can still resolve to entries,
+	// producing spurious lost-packet signals and inflating the loss estimate.
+	if int(feedback.PacketStatusCount) < len(result) {
+		result = result[:feedback.PacketStatusCount]
 	}
 
 	return result, nil
