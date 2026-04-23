@@ -47,7 +47,7 @@ type delayControllerConfig struct {
 	maxBitrate     int
 }
 
-func newDelayController(delayConfig delayControllerConfig, loggerFactory logging.LoggerFactory) *delayController {
+func newDelayController(delayConfig delayControllerConfig, factory logging.LoggerFactory) *delayController {
 	ackPipe := make(chan []cc.Acknowledgment)
 	ackRatePipe := make(chan []cc.Acknowledgment)
 
@@ -58,7 +58,7 @@ func newDelayController(delayConfig delayControllerConfig, loggerFactory logging
 		rateController:          nil,
 		onUpdateCallback:        nil,
 		wg:                      sync.WaitGroup{},
-		log:                     loggerFactory.NewLogger("gcc_delay_controller"),
+		log:                     factory.NewLogger("gcc_delay_controller"),
 	}
 
 	rateController := newRateController(
@@ -71,7 +71,7 @@ func newDelayController(delayConfig delayControllerConfig, loggerFactory logging
 		},
 	)
 	delayController.rateController = rateController
-	overuseDetector := newOveruseDetector(newAdaptiveThreshold(), 10*time.Millisecond, rateController.onDelayStats)
+	overuseDetector := newOveruseDetector(newAdaptiveThreshold(), 10*time.Millisecond, rateController.onDelayStats, factory)
 	slopeEstimator := newSlopeEstimator(newKalman(), overuseDetector.onDelayStats)
 	arrivalGroupAccumulator := newArrivalGroupAccumulator()
 

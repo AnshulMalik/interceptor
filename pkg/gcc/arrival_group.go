@@ -11,9 +11,12 @@ import (
 )
 
 type arrivalGroup struct {
-	packets   []cc.Acknowledgment
+	packets []cc.Acknowledgment
+	// departure holds the highest departure timestamp till now
 	departure time.Time
 	arrival   time.Time
+	// firstDeparture holds the lowest departure timestamp till now
+	firstDeparture time.Time
 }
 
 func newArrivalGroup(a cc.Acknowledgment) arrivalGroup {
@@ -25,8 +28,19 @@ func newArrivalGroup(a cc.Acknowledgment) arrivalGroup {
 }
 
 func (g *arrivalGroup) add(a cc.Acknowledgment) {
+	if len(g.packets) == 0 {
+		g.firstDeparture = a.Departure
+	}
 	g.packets = append(g.packets, a)
 	g.arrival = a.Arrival
+
+	if a.Departure.After(g.departure) {
+		g.departure = a.Departure
+	}
+	if a.Departure.Before(g.firstDeparture) {
+		g.firstDeparture = a.Departure
+	}
+
 }
 
 func (g arrivalGroup) String() string {

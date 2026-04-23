@@ -43,6 +43,8 @@ type Stats struct {
 
 // SendSideBWE implements a combination of loss and delay based GCC.
 type SendSideBWE struct {
+	loggerFactory logging.LoggerFactory
+
 	pacer           Pacer
 	lossController  *lossBasedBandwidthEstimator
 	delayController *delayController
@@ -56,10 +58,9 @@ type SendSideBWE struct {
 	minBitrate    int
 	maxBitrate    int
 
-	close     chan struct{}
-	closeLock sync.RWMutex
-
-	loggerFactory logging.LoggerFactory
+	close      chan struct{}
+	closeLock  sync.RWMutex
+	lastUpdate time.Time
 }
 
 // Option configures a bandwidth estimator.
@@ -116,7 +117,6 @@ func NewSendSideBWE(opts ...Option) (*SendSideBWE, error) {
 		pacer:                 nil,
 		lossController:        nil,
 		delayController:       nil,
-		feedbackAdapter:       cc.NewFeedbackAdapter(),
 		onTargetBitrateChange: nil,
 		lock:                  sync.Mutex{},
 		latestStats:           Stats{},
@@ -124,6 +124,7 @@ func NewSendSideBWE(opts ...Option) (*SendSideBWE, error) {
 		minBitrate:            minBitrate,
 		maxBitrate:            maxBitrate,
 		close:                 make(chan struct{}),
+		loggerFactory:         logging.NewDefaultLoggerFactory(),
 	}
 	for _, opt := range opts {
 		if err := opt(send); err != nil {
@@ -133,8 +134,9 @@ func NewSendSideBWE(opts ...Option) (*SendSideBWE, error) {
 	if send.loggerFactory == nil {
 		send.loggerFactory = logging.NewDefaultLoggerFactory()
 	}
+	send.feedbackAdapter = cc.NewFeedbackAdapter(send.loggerFactory)
 	if send.pacer == nil {
-		send.pacer = newLeakyBucketPacer(send.latestBitrate, send.loggerFactory)
+		send.pacer = NewLeakyBucketPacer(send.latestBitrate, send.loggerFactory)
 	}
 	send.lossController = newLossBasedBWE(send.latestBitrate, send.loggerFactory)
 	send.delayController = newDelayController(delayControllerConfig{
@@ -229,6 +231,7 @@ func (e *SendSideBWE) WriteRTCP(pkts []rtcp.Packet, _ interceptor.Attributes) er
 		}
 		if feedbackMinRTT < math.MaxInt {
 			e.delayController.updateRTT(feedbackMinRTT)
+			e.lossController.updateRTT(feedbackMinRTT)
 		}
 
 		e.lossController.updateLossEstimate(acks)
@@ -258,6 +261,7 @@ func (e *SendSideBWE) GetStats() map[string]any {
 		"delayMeasurement":   float64(e.latestStats.Measurement.Microseconds()) / 1000.0,
 		"delayEstimate":      float64(e.latestStats.Estimate.Microseconds()) / 1000.0,
 		"delayThreshold":     float64(e.latestStats.Threshold.Microseconds()) / 1000.0,
+		"rtt":                float64(e.delayController.latestRTT.Microseconds()) / 1000.0,
 		"usage":              e.latestStats.Usage.String(),
 		"state":              e.latestStats.State.String(),
 	}
@@ -296,15 +300,22 @@ func (e *SendSideBWE) onDelayUpdate(delayStats DelayStats) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
+	now := time.Now()
+	if e.lastUpdate.IsZero() {
+		e.lastUpdate = now
+	}
+
 	lossStats := e.lossController.getEstimate(delayStats.TargetBitrate)
 	bitrateChanged := false
+	//fmt.Println("delaybitrate:", delayStats.TargetBitrate, ",lossbitrate:", lossStats.TargetBitrate)
 	bitrate := min(delayStats.TargetBitrate, lossStats.TargetBitrate)
-	if bitrate != e.latestBitrate {
+	// Even if the bitrate has not changed, send the update, since our algorithm depends on constant updates
+	if bitrate != e.latestBitrate || now.Sub(e.lastUpdate).Milliseconds() > 500 {
 		bitrateChanged = true
 		e.latestBitrate = bitrate
 		e.pacer.SetTargetBitrate(e.latestBitrate)
+		e.lastUpdate = now
 	}
-
 	if bitrateChanged && e.onTargetBitrateChange != nil {
 		go e.onTargetBitrateChange(bitrate)
 	}

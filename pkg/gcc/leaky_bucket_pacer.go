@@ -43,14 +43,10 @@ type LeakyBucketPacer struct {
 	pool *sync.Pool
 }
 
-// NewLeakyBucketPacer initializes a new LeakyBucketPacer.
-func NewLeakyBucketPacer(initialBitrate int) *LeakyBucketPacer {
-	return newLeakyBucketPacer(initialBitrate, logging.NewDefaultLoggerFactory())
-}
-
-func newLeakyBucketPacer(initialBitrate int, loggerFactory logging.LoggerFactory) *LeakyBucketPacer {
+// NewLeakyBucketPacer initializes a new LeakyBucketPacer
+func NewLeakyBucketPacer(initialBitrate int, factory logging.LoggerFactory) *LeakyBucketPacer {
 	pacer := &LeakyBucketPacer{
-		log:            loggerFactory.NewLogger("pacer"),
+		log:            factory.NewLogger("pacer"),
 		f:              1.5,
 		targetBitrate:  initialBitrate,
 		pacingInterval: 5 * time.Millisecond,
